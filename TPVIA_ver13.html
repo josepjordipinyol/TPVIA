@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TPV Bar con Voz y Cantidades</title>
+<style>
+body { font-family: Arial; margin:0; padding:0; display:flex; flex-direction:column; align-items:center; }
+h1 { text-align:center; width:100%; background:#333; color:#fff; padding:10px 0; margin:0; }
+.container { display:flex; width:100%; max-width:1200px; margin-top:10px; gap:20px; }
+.productos, .pedido { flex:1; padding:10px; border:1px solid #ccc; border-radius:8px; background:#f9f9f9; }
+.categorias { display:flex; gap:5px; margin-bottom:10px; flex-wrap:wrap; }
+.categoria-btn { padding:5px 10px; background:#008CBA; color:#fff; border:none; border-radius:5px; cursor:pointer; }
+.producto-card { display:flex; flex-direction:column; align-items:center; border:1px solid #ccc; border-radius:8px; padding:10px; margin:5px; width:120px; }
+.producto-card img { width:80px; height:80px; object-fit:cover; margin-bottom:5px; }
+button { cursor:pointer; border:none; border-radius:5px; padding:5px 10px; margin:2px; }
+.btn-add { background:#4CAF50; color:#fff; }
+.btn-remove { background:#f44336; color:#fff; }
+.btn-pay { background:#008CBA; color:#fff; width:100%; margin-top:5px; }
+#pedido-lista div { margin-bottom:5px; display:flex; justify-content:space-between; align-items:center; }
+#voz-confirmacion { margin:5px 0; display:flex; align-items:center; }
+#mic-icon { width:20px; height:20px; margin-right:5px; display:none; animation:pulse 1s infinite; }
+@keyframes pulse{0%{transform:scale(1);opacity:1}50%{transform:scale(1.3);opacity:0.5}100%{transform:scale(1);opacity:1}}
+#modal-gestion { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); justify-content:center; align-items:center; }
+#modal-gestion .modal-content { background:#fff; padding:20px; border-radius:10px; width:80%; max-width:600px; position:relative; }
+#modal-gestion .modal-content h3 { margin-top:0; }
+#modal-gestion .modal-content button.cerrar { position:absolute; top:10px; right:10px; background:#f44336; color:#fff; }
+</style>
+</head>
+<body>
+<h1>TPV Bar con Voz y Cantidades</h1>
+
+<div class="container">
+  <div class="productos">
+    <div class="categorias" id="categorias-btns"></div>
+    <div id="productos-grid" style="display:flex; flex-wrap:wrap;"></div>
+    <div id="voz-confirmacion"><img id="mic-icon" src="https://cdn-icons-png.flaticon.com/512/149/149852.png"/><span id="voz-texto"></span></div>
+    <button class="btn-add" onclick="iniciarVoz()">🎤 Hablar</button>
+  </div>
+
+  <div class="pedido">
+    <h2>Pedido</h2>
+    <div id="pedido-lista"></div>
+    <div id="totales"></div>
+    <button class="btn-pay" onclick="pagar('efectivo')">Pagar Efectivo</button>
+    <button class="btn-pay" onclick="pagar('tarjeta')">Pagar Tarjeta</button>
+    <button class="btn-pay" onclick="abrirGestion()">🛠️ Gestión de Productos</button>
+    <h3>Caja</h3>
+    <button class="btn-pay" onclick="hacerCajaParcial()">📊 Caja Parcial</button>
+    <button class="btn-pay" onclick="hacerCajaTotal()">💰 Caja Total</button>
+    <button class="btn-pay" onclick="exportarCaja()">📥 Exportar CSV</button>
+    <div id="resumen-caja"></div>
+  </div>
+</div>
+
+<div id="ticket"></div>
+
+<!-- Modal Gestión -->
+<div id="modal-gestion">
+  <div class="modal-content">
+    <h3>Gestión de Productos <button class="cerrar" onclick="cerrarGestion()">✖</button></h3>
+    <div id="gestion-lista"></div>
+    <button class="btn-add" onclick="agregarProductoPrompt()">➕ Añadir producto</button>
+  </div>
+</div>
+
+<script>
+// Carta inicial con palabras clave y marcas
+
+let carta = [
+  {nombre:"Coca-Cola", precio:2, categoria:"Refrescos", imagen:"https://via.placeholder.com/80?text=Coke", keywords:["coca cola","coke","refresco de cola"]},
+  {nombre:"Limonada", precio:2, categoria:"Refrescos", imagen:"https://via.placeholder.com/80?text=Limonada", keywords:["limonada","refresco de limón"]},
+  {nombre:"Naranjada", precio:2, categoria:"Refrescos", imagen:"https://via.placeholder.com/80?text=Naranjada", keywords:["naranjada","refresco de naranja"]},
+  {nombre:"Red Bull", precio:3, categoria:"Refrescos", imagen:"https://via.placeholder.com/80?text=RedBull", keywords:["red bull","energética"]},
+  {nombre:"Whisky", precio:4, categoria:"Alcoholes", imagen:"https://via.placeholder.com/80?text=Whisky", keywords:["whisky","whiskey"]},
+  {nombre:"Ron", precio:3.5, categoria:"Alcoholes", imagen:"https://via.placeholder.com/80?text=Ron", keywords:["ron","ron blanco","ron oscuro"]},
+  {nombre:"Gin Tonic", precio:5, categoria:"Combinados", imagen:"https://via.placeholder.com/80?text=GinTonic", keywords:["gin tonic","gintonic","gin"]},
+  {nombre:"Chupito Tequila", precio:2, categoria:"Chupitos", imagen:"https://via.placeholder.com/80?text=Tequila", keywords:["chupito tequila","tequila"]},
+  {nombre:"Chupito Vodka", precio:2, categoria:"Chupitos", imagen:"https://via.placeholder.com/80?text=Vodka", keywords:["chupito vodka","vodka"]}
+];
+
+
+
+
+let pedido=[];
+
+// Normalizar texto
+function limpiar(texto){
+  return texto.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9\s]/g,"").trim();
+}
+
+// Corregir marcas frecuentes
+function corregirMarcas(texto){
+  let marcas = {
+      "seegrams":"seagrams",
+      "seagrams":"seagrams",
+      "beefater":"beefeater",
+      "beefeater":"beefeater",
+      "gin beefeater":"beefeater",
+      "beefeater gin":"beefeater"
+  };
+  texto = texto.toLowerCase();
+  for(let key in marcas){
+      let regex = new RegExp(key,"gi");
+      texto = texto.replace(regex, marcas[key]);
+  }
+  return texto;
+}
+
+// Similaridad simple
+function similaridad(texto1,texto2){
+  texto1=limpiar(texto1).split(" ");
+  texto2=limpiar(texto2).split(" ");
+  let coincidencias=texto1.filter(t1=>texto2.includes(t1));
+  return coincidencias.length/Math.max(texto1.length,texto2.length);
+}
+
+// Cargar categorías
+function cargarCategorias(){
+  let div=document.getElementById('categorias-btns'); div.innerHTML='';
+  [...new Set(carta.map(p=>p.categoria))].forEach(c=>{
+    let btn=document.createElement('button'); btn.className='categoria-btn'; btn.textContent=c;
+    btn.addEventListener('click',()=>mostrarCategoria(c));
+    div.appendChild(btn);
+  });
+  mostrarCategoria(carta[0].categoria);
+}
+
+// Mostrar productos por categoría
+function mostrarCategoria(categoria){
+  let div=document.getElementById('productos-grid'); div.innerHTML='';
+  carta.filter(p=>p.categoria===categoria).forEach(p=>{
+    let card=document.createElement('div'); card.className='producto-card';
+    card.innerHTML=`<img src="${p.imagen}"/><div>${p.nombre}</div><div>${p.precio}€</div>`;
+    let btn=document.createElement('button'); btn.className='btn-add'; btn.textContent='Añadir';
+    btn.addEventListener('click',()=>agregarPedidoProducto(p));
+    card.appendChild(btn);
+    div.appendChild(card);
+  });
+}
+
+// Agregar producto al pedido
+function agregarPedidoProducto(producto,cantidad=1){
+  let e=pedido.find(x=>x.nombre===producto.nombre);
+  e ? e.cantidad += cantidad : pedido.push({...producto, cantidad:cantidad});
+  renderPedido(); renderGestion();
+}
+
+// Renderizar pedido
+function renderPedido(){
+  let div=document.getElementById('pedido-lista'); div.innerHTML='';
+  pedido.forEach(p=>{
+    let d=document.createElement('div');
+    d.innerHTML=`${p.nombre} x${p.cantidad} - ${(p.precio*p.cantidad).toFixed(2)}€ `;
+    let btn=document.createElement('button'); btn.className='btn-remove'; btn.textContent='X';
+    btn.addEventListener('click',()=>eliminarPedido(p));
+    d.appendChild(btn); div.appendChild(d);
+  });
+  calcularTotales();
+}
+
+// Totales
+function calcularTotales(){
+  let s=pedido.reduce((a,p)=>a+p.precio*p.cantidad,0), i=s*0.1, prop=s*0.05, t=s+i+prop;
+  document.getElementById('totales').innerHTML=`Subtotal: ${s.toFixed(2)}€<br>IVA: ${i.toFixed(2)}€<br>Propina: ${prop.toFixed(2)}€<br><b>Total: ${t.toFixed(2)}€</b>`;
+  return t;
+}
+
+function eliminarPedido(pedidoItem){ pedido=pedido.filter(p=>p!==pedidoItem); renderPedido(); renderGestion(); }
+
+function pagar(metodo){ alert(`Total: ${calcularTotales().toFixed(2)}€ con ${metodo}`); imprimirTicket(); pedido=[]; renderPedido(); }
+
+function imprimirTicket(){ 
+  let t='<h3>Ticket</h3>'; 
+  pedido.forEach(p=>t+=`<div>${p.nombre} x${p.cantidad} - ${(p.precio*p.cantidad).toFixed(2)}€</div>`); 
+  t+=`<b>Total: ${calcularTotales().toFixed(2)}€</b>`; 
+  document.getElementById('ticket').innerHTML=t; 
+}
+
+// Voz con AI avanzado y reconocimiento de cantidad
+function iniciarVoz(){
+  let mic = document.getElementById('mic-icon'); mic.style.display='inline';
+  let recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+  recognition.lang = 'es-ES';
+  recognition.start();
+
+  recognition.onresult = function(event){
+    let textoHablado = event.results[0][0].transcript;
+    document.getElementById('voz-texto').textContent = textoHablado;
+    mic.style.display='none';
+
+    // Corregir marcas frecuentes
+    let textoLimpio = limpiar(corregirMarcas(textoHablado));
+
+    // Borrar pedido
+    if(textoLimpio.includes("borrar pedido") || textoLimpio.includes("eliminar pedido")){
+        pedido = [];
+        renderPedido();
+        alert("Pedido borrado por voz");
+        return;
+    }
+
+    // Detectar cantidad
+    let cantidad = 1;
+    let matchNum = textoLimpio.match(/\b(\d+)\b/);
+    if(matchNum) cantidad = parseInt(matchNum[1]);
+    else {
+      const numeros = { "uno":1,"dos":2,"tres":3,"cuatro":4,"cinco":5,"seis":6,"siete":7,"ocho":8,"nueve":9,"diez":10 };
+      for(let word in numeros){
+        if(textoLimpio.includes(word)){ cantidad = numeros[word]; break; }
+      }
+    }
+
+    // Buscar producto por palabras clave
+    let mejorProducto = null;
+    let mejorSim = 0.0;
+    carta.forEach(producto=>{
+        producto.keywords.forEach(kw=>{
+            let sim = similaridad(textoLimpio, kw);
+            if(sim > mejorSim){ mejorSim = sim; mejorProducto = producto; }
+        });
+    });
+
+    if(mejorProducto && mejorSim >= 0.4){
+        agregarPedidoProducto(mejorProducto, cantidad);
+    }
+  };
+
+  recognition.onerror = recognition.onend = function(){ mic.style.display='none'; }
+}
+
+// Modal gestión
+function abrirGestion(){ document.getElementById('modal-gestion').style.display='flex'; renderGestion(); }
+function cerrarGestion(){ document.getElementById('modal-gestion').style.display='none'; }
+
+function renderGestion(){
+  let div=document.getElementById('gestion-lista'); div.innerHTML='';
+  carta.forEach(p=>{
+    let d=document.createElement('div'); d.textContent=`${p.nombre} ${p.precio}€ `;
+    let btnEdit=document.createElement('button'); btnEdit.textContent='✏️'; btnEdit.addEventListener('click',()=>editarProductoPrompt(p));
+    let btnDel=document.createElement('button'); btnDel.textContent='🗑️'; btnDel.addEventListener('click',()=>eliminarProducto(p));
+    d.appendChild(btnEdit); d.appendChild(btnDel);
+    div.appendChild(d);
+  });
+}
+
+// Añadir/Editar/Eliminar productos
+function agregarProductoPrompt(){
+  let n=prompt('Nombre'), c=parseFloat(prompt('Precio')), cat=prompt('Categoria'), img=prompt('URL Imagen');
+  if(n && c && cat){ carta.push({nombre:n, precio:c, categoria:cat, imagen:img||'https://via.placeholder.com/80', keywords:[n.toLowerCase()]}); cargarCategorias(); renderGestion(); }
+}
+function editarProductoPrompt(p){
+  let nn=prompt('Nombre',p.nombre), c=parseFloat(prompt('Precio',p.precio)), cat=prompt('Categoria',p.categoria), img=prompt('URL Imagen',p.imagen);
+  if(nn && c && cat){ p.nombre=nn; p.precio=c; p.categoria=cat; p.imagen=img; p.keywords=[nn.toLowerCase()]; cargarCategorias(); renderGestion(); }
+}
+function eliminarProducto(p){ carta=carta.filter(x=>x!==p); cargarCategorias(); renderGestion(); }
+
+// Caja
+function hacerCajaParcial(){ document.getElementById('resumen-caja').innerText=`Caja parcial: ${calcularTotales().toFixed(2)}€`; }
+function hacerCajaTotal(){ document.getElementById('resumen-caja').innerText=`Caja total: ${calcularTotales().toFixed(2)}€`; }
+function exportarCaja(){ let csv='Producto,Cantidad,Precio\n'; pedido.forEach(p=>{ csv+=`${p.nombre},${p.cantidad},${p.precio}\n`; });
+  let link=document.createElement('a'); link.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv); link.download='caja.csv'; document.body.appendChild(link); link.click(); document.body.removeChild(link);
+}
+
+// Inicialización
+cargarCategorias(); renderPedido();
+</script>
+</body>
+</html>
